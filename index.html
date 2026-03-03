@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Shadow Runner (3 Tur)</title>
+
+  <meta name="theme-color" content="#060712" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+  <style>
+    html, body { margin:0; height:100%; background:#060712; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    .wrap { display:flex; align-items:center; justify-content:center; height:100%; }
+    canvas {
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:14px;
+      touch-action: manipulation;
+      box-shadow: 0 0 24px rgba(0,255,255,.08), 0 0 44px rgba(255,0,255,.06);
+    }
+    .hint { position:fixed; left:12px; right:12px; bottom:12px; color:rgba(255,255,255,.78); font-size:12px; display:flex; justify-content:space-between; gap:12px; }
+    .badge { padding:8px 10px; border-radius:10px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); }
+  
+    .mobileControls{
+      position:fixed;
+      left:12px; right:12px;
+      bottom:58px;
+      display:flex;
+      gap:10px;
+      justify-content:center;
+      z-index:10;
+      pointer-events:auto;
+    }
+    .btn{
+      -webkit-tap-highlight-color: transparent;
+      border:1px solid rgba(255,255,255,.16);
+      background:rgba(255,255,255,.08);
+      color:rgba(255,255,255,.92);
+      padding:10px 12px;
+      border-radius:12px;
+      font-weight:800;
+      font-size:13px;
+      min-width:120px;
+      user-select:none;
+      touch-action: manipulation;
+    }
+    .btn:active{ transform: scale(0.98); }
+    .btn.primary{ background:rgba(0,255,255,.12); border-color:rgba(0,255,255,.22); }
+    .btn.danger{ background:rgba(255,0,80,.12); border-color:rgba(255,0,80,.22); }
+    @media (min-width: 820px){
+      .mobileControls{ display:none; }
+    }
+
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="c" width="900" height="520"></canvas>
+  </div>
+
+  <div class="mobileControls" aria-label="Mobil Kontroller">
+    <button id="btnJump" class="btn primary">Zıpla</button>
+    <button id="btnRestart" class="btn">Yeniden Başlat</button>
+    <button id="btnResetBest" class="btn danger">Rekoru Sıfırla</button>
+  </div>
+
+  <div class="hint">
+    <div class="badge">PC: <b>Space</b> | Mobil: <b>Dokun</b> / <b>Zıpla</b> → Zıpla</div>
+    <div class="badge">PC: R Yeniden Başlat • B Rekoru Sıfırla (Mobil: butonlar)</div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  // Responsive scaling
+  function fitCanvas() {
+    const maxW = Math.min(window.innerWidth - 24, 900);
+    const maxH = Math.min(window.innerHeight - 90, 520);
+    const scale = Math.min(maxW / 900, maxH / 520);
+    canvas.style.width = Math.floor(900 * scale) + "px";
+    canvas.style.height = Math.floor(520 * scale) + "px";
+  }
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas();
+
+  const W = canvas.width, H = canvas.height;
+  const groundY = 410;
+
+  // ===== Difficulty tuning per Tur =====
+  // Tur 1 (en kolay)
+  const T1 = { gravity: 2400, jumpV: -1120, speedStart: 330, speedRamp: 9,  spawnMin: 0.95, spawnVar: 0.85, spawnFactor: 1.18 };
+  // Tur 2 (Tur1'den zor ama önceki halden daha kolay)
+  const T2 = { gravity: 2500, jumpV: -1080, speedStart: 385, speedRamp: 12, spawnMin: 0.80, spawnVar: 0.65, spawnFactor: 1.02 };
+  // Tur 3 (şimdilik orta-zor)
+  const T3 = { gravity: 2550, jumpV: -1060, speedStart: 420, speedRamp: 14, spawnMin: 0.74, spawnVar: 0.60, spawnFactor: 0.95 };
+
+  // ===== State =====
+  let last = performance.now();
+  let running = true;
+  let started = false;
+
+  const player = { x: 160, y: groundY - 84, w: 42, h: 84, vy: 0, onGround: true };
+
+  let speed = T1.speedStart;
+  let speedRamp = T1.speedRamp;
+
+  let obstacles = [];
+  let score = 0;
+
+  // Rekor
+  let best = Number(localStorage.getItem('sr_best') || 0);
+
+  // Turlar: 1 (0-499), 2 (500-999), 3 (>=1000)
+  let tur = 1;
+
+  // banners / flashes
+  let turBanner = 0;          // "Tur X" fade
+  let wordFlash = 0;          // 0..1
+  let lastWordTrigger = 0;    // last 100 multiple handled
+  let arrowFlash = 0;         // 0..1
+  let lastArrowTrigger = 0;   // last 250 multiple handled
+
+  // Spawn control
+  let spawnTimer = 0;
+  let nextSpawn = T1.spawnMin + Math.random() * T1.spawnVar;
+
+  // Special sequences
+  let loveSequence = 0;       // seconds remaining for "Sizi seviyorum" + hearts (after Tur2 ends)
+  let afterLoveToTur3 = false;
+
+  // Tur3 milestone
+  let clearedInTur3 = 0;
+  let tur3Message = 0;        // 0..1 fade timer
+
+  // ===== Helpers =====
+  function setTur(newTur) {
+    tur = newTur;
+    turBanner = 1;
+    spawnTimer = 0;
+    obstacles = [];
+
+    if (tur === 1) {
+      speed = T1.speedStart;
+      speedRamp = T1.speedRamp;
+      nextSpawn = T1.spawnMin + Math.random() * T1.spawnVar;
+    } else if (tur === 2) {
+      // keep momentum but clamp for fairness
+      speed = Math.max(speed, T2.speedStart);
+      speedRamp = T2.speedRamp;
+      nextSpawn = T2.spawnMin + Math.random() * T2.spawnVar;
+      // reset triggers so Bahar starts clean
+      lastWordTrigger = Math.floor(score / 100) * 100;
+      lastArrowTrigger = Math.floor(score / 250) * 250;
+    } else {
+      speed = Math.max(speed, T3.speedStart);
+      speedRamp = T3.speedRamp;
+      nextSpawn = T3.spawnMin + Math.random() * T3.spawnVar;
+      clearedInTur3 = 0;
+      tur3Message = 0;
+      // no word flash in Tur3
+    }
+  }
+
+  function reset() {
+    running = true;
+    started = false;
+    score = 0;
+
+    player.y = groundY - player.h;
+    player.vy = 0;
+    player.onGround = true;
+
+    obstacles = [];
+    spawnTimer = 0;
+
+    tur = 1;
+    speed = T1.speedStart;
+    speedRamp = T1.speedRamp;
+    nextSpawn = T1.spawnMin + Math.random() * T1.spawnVar;
+
+    turBanner = 0;
+    wordFlash = 0;
+    lastWordTrigger = 0;
+    arrowFlash = 0;
+    lastArrowTrigger = 0;
+
+    loveSequence = 0;
+    afterLoveToTur3 = false;
+
+    clearedInTur3 = 0;
+    tur3Message = 0;
+
+    last = performance.now();
+  }
+
+  function updateBestIfNeeded() {
+    const s = Math.floor(score);
+    if (s > best) {
+      best = s;
+      localStorage.setItem('sr_best', String(best));
+    }
+  }
+
+  function clearBest() {
+    best = 0;
+    localStorage.setItem('sr_best', '0');
+  }
+
+  function jump() {
+    if (!running) return;
+    if (!started) started = true;
+
+    const cfg = tur === 1 ? T1 : (tur === 2 ? T2 : T3);
+
+    if (player.onGround) {
+      player.vy = cfg.jumpV;
+      player.onGround = false;
+    }
+  }
+
+  function aabb(a,b){
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function circleRectCollide(circle, rect) {
+    const closestX = Math.max(rect.x, Math.min(circle.x, rect.x + rect.w));
+    const closestY = Math.max(rect.y, Math.min(circle.y, rect.y + rect.h));
+    const dx = circle.x - closestX;
+    const dy = circle.y - closestY;
+    return (dx*dx + dy*dy) <= circle.r*circle.r;
+  }
+
+  function drawText(text, x, y, size=18, alpha=1, weight=700, color="rgba(255,255,255,.92)") {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.font = `${weight} ${size}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+    ctx.fillText(text, x, y);
+    ctx.restore();
+  }
+
+  // ===== Background =====
+  function drawNeonBackground(now) {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    if (tur === 1) {
+      g.addColorStop(0, "#05061a"); g.addColorStop(0.55, "#070a1f"); g.addColorStop(1, "#040414");
+    } else if (tur === 2) {
+      g.addColorStop(0, "#12061e"); g.addColorStop(0.55, "#140b2a"); g.addColorStop(1, "#070413");
+    } else {
+      g.addColorStop(0, "#071b1b"); g.addColorStop(0.55, "#07132a"); g.addColorStop(1, "#040414");
+    }
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    const t = now * 0.0002;
+    const blobs1 = [
+      {x: W*0.25 + Math.sin(t*2.1)*80, y: H*0.28 + Math.cos(t*1.7)*40, r: 180, c:"rgba(0,255,255,.10)"},
+      {x: W*0.72 + Math.cos(t*1.9)*90, y: H*0.22 + Math.sin(t*2.3)*50, r: 210, c:"rgba(255,0,255,.09)"},
+      {x: W*0.55 + Math.sin(t*1.2)*60, y: H*0.52 + Math.cos(t*1.4)*40, r: 240, c:"rgba(0,180,255,.06)"},
+    ];
+    const blobs2 = [
+      {x: W*0.22 + Math.sin(t*2.0)*85, y: H*0.26 + Math.cos(t*1.6)*45, r: 200, c:"rgba(255,80,120,.10)"},
+      {x: W*0.76 + Math.cos(t*2.1)*95, y: H*0.22 + Math.sin(t*2.2)*55, r: 230, c:"rgba(180,0,255,.10)"},
+      {x: W*0.56 + Math.sin(t*1.1)*70, y: H*0.56 + Math.cos(t*1.3)*45, r: 260, c:"rgba(255,140,0,.05)"},
+    ];
+    const blobs3 = [
+      {x: W*0.26 + Math.sin(t*1.8)*90, y: H*0.25 + Math.cos(t*1.3)*50, r: 210, c:"rgba(0,255,200,.10)"},
+      {x: W*0.74 + Math.cos(t*2.0)*110, y: H*0.28 + Math.sin(t*1.9)*55, r: 240, c:"rgba(120,180,255,.10)"},
+      {x: W*0.55 + Math.sin(t*1.0)*70, y: H*0.55 + Math.cos(t*1.2)*45, r: 270, c:"rgba(0,160,255,.06)"},
+    ];
+    const blobs = (tur === 1) ? blobs1 : (tur === 2 ? blobs2 : blobs3);
+
+    for (const b of blobs) {
+      const rg = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r);
+      rg.addColorStop(0, b.c);
+      rg.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = rg;
+      ctx.fillRect(0,0,W,H);
+    }
+
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    for (let i=0;i<14;i++){
+      const y = 70 + i*22;
+      if (tur === 1) ctx.strokeStyle = i%2===0 ? "rgba(0,255,255,.18)" : "rgba(255,0,255,.16)";
+      else if (tur === 2) ctx.strokeStyle = i%2===0 ? "rgba(255,80,140,.16)" : "rgba(180,0,255,.16)";
+      else ctx.strokeStyle = i%2===0 ? "rgba(0,255,200,.14)" : "rgba(120,180,255,.14)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.fillStyle = "rgba(255,255,255,.08)";
+    for (let i=0;i<55;i++){
+      const sx = (i*113 + (now*0.03)) % W;
+      const sy = (i*67) % 260;
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+  }
+
+  // ===== Flashes =====
+  function drawWordFlash() {
+    if (wordFlash <= 0) return;
+    let word = (tur === 2) ? "Bahar" : "Demir";
+    if (tur !== 1 && tur !== 2) return;
+
+    ctx.save();
+    ctx.globalAlpha = wordFlash * 0.20;
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    ctx.font = `900 120px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+    ctx.fillText(word, W*0.18, H*0.62);
+
+    ctx.globalAlpha = wordFlash * 0.12;
+    ctx.fillStyle = (tur === 2) ? "rgba(255,80,140,1)" : "rgba(0,255,255,1)";
+    ctx.fillText(word, W*0.18 + 3, H*0.62 + 2);
+
+    ctx.globalAlpha = wordFlash * 0.10;
+    ctx.fillStyle = (tur === 2) ? "rgba(180,0,255,1)" : "rgba(255,0,255,1)";
+    ctx.fillText(word, W*0.18 - 3, H*0.62 - 2);
+    ctx.restore();
+  }
+
+  function drawArrowFlash() {
+    if (arrowFlash <= 0) return;
+    // small cute arrow to the right
+    const x = W * 0.78;
+    const y = H * 0.22;
+    const s = 34;
+
+    ctx.save();
+    ctx.globalAlpha = arrowFlash * 0.9;
+
+    // glow
+    ctx.strokeStyle = "rgba(255,255,255,.85)";
+    ctx.lineWidth = 6;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x - s, y);
+    ctx.lineTo(x + s, y);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(x + s, y);
+    ctx.lineTo(x + s - 16, y - 12);
+    ctx.moveTo(x + s, y);
+    ctx.lineTo(x + s - 16, y + 12);
+    ctx.stroke();
+
+    ctx.globalAlpha = arrowFlash * 0.25;
+    ctx.strokeStyle = (tur === 2) ? "rgba(255,80,140,1)" : "rgba(0,255,255,1)";
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.moveTo(x - s, y);
+    ctx.lineTo(x + s, y);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // ===== Characters =====
+  function drawStickmanBase(px, py, opts) {
+    const cx = px + player.w/2;
+    const headR = 14;
+    const headX = cx;
+    const headY = py + 18;
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    // Optional accessories behind body
+    if (opts.accessory) opts.accessory({cx, py});
+
+    // Main lines
+    ctx.strokeStyle = "rgba(255,255,255,.92)";
+    ctx.lineWidth = 5;
+
+    // Head
+    ctx.beginPath();
+    ctx.arc(headX, headY, headR, 0, Math.PI*2);
+    ctx.stroke();
+
+    // Eyes
+    ctx.fillStyle = "rgba(255,255,255,.9)";
+    ctx.beginPath(); ctx.arc(headX - 5, headY - 3, 1.6, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(headX + 5, headY - 3, 1.6, 0, Math.PI*2); ctx.fill();
+
+    // Mouth
+    ctx.strokeStyle = "rgba(255,255,255,.85)";
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    if (opts.mouth === "smile") {
+      ctx.arc(headX, headY + 3, 6, 0.15*Math.PI, 0.85*Math.PI);
+    } else if (opts.mouth === "soft") {
+      ctx.arc(headX, headY + 4, 5.5, 0.25*Math.PI, 0.75*Math.PI);
+    } else {
+      ctx.arc(headX, headY + 4, 5, 0.30*Math.PI, 0.70*Math.PI);
+    }
+    ctx.stroke();
+
+    // Facial hair (mustache/beard)
+    if (opts.facialHair) opts.facialHair({headX, headY});
+
+    // Body
+    ctx.strokeStyle = "rgba(255,255,255,.92)";
+    ctx.lineWidth = 5;
+    const bodyTopY = headY + headR;
+    const bodyBotY = py + 54;
+    ctx.beginPath();
+    ctx.moveTo(cx, bodyTopY);
+    ctx.lineTo(cx, bodyBotY);
+    ctx.stroke();
+
+    // Arms
+    if (opts.armPose) {
+      opts.armPose({cx, py});
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(cx - 20, py + 38);
+      ctx.lineTo(cx + 20, py + 38);
+      ctx.stroke();
+    }
+
+    // Legs (run)
+    const runPhase = started && running ? (performance.now()*0.01) : 0;
+    const swing = Math.sin(runPhase) * 8;
+    ctx.beginPath();
+    ctx.moveTo(cx, bodyBotY);
+    ctx.lineTo(cx - 16, py + 80 - swing);
+    ctx.moveTo(cx, bodyBotY);
+    ctx.lineTo(cx + 16, py + 80 + swing);
+    ctx.stroke();
+
+    // Head glow
+    ctx.globalAlpha = 0.12;
+    ctx.strokeStyle = (tur === 2) ? "rgba(255,80,140,1)" : (tur === 3 ? "rgba(0,255,200,1)" : "rgba(0,255,255,1)");
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.arc(headX, headY, headR+2, 0, Math.PI*2);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // Tur1: friendly stickman (male-ish) - no accessories
+  function drawTur1(px, py) {
+    drawStickmanBase(px, py, { mouth: "smile" });
+  }
+
+  // Tur2: female version + handbag on shoulder/hand, no backpack, no text
+  function drawTur2(px, py) {
+    const accessory = ({cx, py}) => {
+      // handbag (adult woman vibe) - hanging at right side
+      const bagX = cx + 18;
+      const bagY = py + 50;
+      const bw = 20, bh = 16;
+
+      ctx.save();
+      // strap over shoulder
+      ctx.strokeStyle = "rgba(255,255,255,.70)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(cx - 2, py + 32);         // shoulder
+      ctx.lineTo(bagX + 6, bagY - 4);      // strap to bag
+      ctx.stroke();
+
+      // bag body
+      ctx.fillStyle = "rgba(255,80,140,1)";
+      ctx.strokeStyle = "rgba(255,255,255,.25)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(bagX, bagY, bw, bh, 5);
+      ctx.fill();
+      ctx.stroke();
+
+      // small glow
+      ctx.globalAlpha = 0.18;
+      ctx.strokeStyle = "rgba(180,0,255,1)";
+      ctx.lineWidth = 10;
+      ctx.strokeRect(bagX, bagY, bw, bh);
+      ctx.restore();
+    };
+
+    const armPose = ({cx, py}) => {
+      // slightly "feminine" arms: one up-ish, one down-ish
+      ctx.beginPath();
+      ctx.moveTo(cx - 18, py + 38);
+      ctx.lineTo(cx + 10, py + 34);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(cx + 10, py + 36);
+      ctx.lineTo(cx + 18, py + 56);
+      ctx.stroke();
+    };
+
+    drawStickmanBase(px, py, { mouth:"soft", accessory, armPose });
+  }
+
+  // Tur3: father figure with mustache + beard
+  function drawTur3(px, py) {
+    const facialHair = ({headX, headY}) => {
+      ctx.save();
+      // mustache
+      ctx.strokeStyle = "rgba(255,255,255,.88)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(headX - 6, headY + 4);
+      ctx.quadraticCurveTo(headX, headY + 1, headX + 6, headY + 4);
+      ctx.stroke();
+
+      // beard (small)
+      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = "rgba(255,255,255,.78)";
+      ctx.lineWidth = 2.8;
+      ctx.beginPath();
+      ctx.arc(headX, headY + 8, 7, 0.15*Math.PI, 0.85*Math.PI);
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    drawStickmanBase(px, py, { mouth:"smile", facialHair });
+  }
+
+  function drawCharacter() {
+    if (tur === 1) drawTur1(player.x, player.y);
+    else if (tur === 2) drawTur2(player.x, player.y);
+    else drawTur3(player.x, player.y);
+  }
+
+  // ===== Obstacles =====
+  function spawnRectObstacle() {
+    const type = Math.random() < 0.72 ? 'box' : 'bar';
+    let w, h;
+    if (type === 'box') { w = 40 + Math.random()*18; h = 52 + Math.random()*34; }
+    else { w = 80 + Math.random()*50; h = 24 + Math.random()*18; }
+    obstacles.push({ kind:'rect', x: W + 30, y: groundY - h, w, h, type, passed:false });
+  }
+
+  function spawnBallObstacle() {
+    const r = 18 + Math.random()*14;
+    const baseY = groundY - r;
+    const amp = 10 + Math.random()*14;
+    const freq = 5.2 + Math.random()*2.0;
+    obstacles.push({
+      kind:'circle',
+      x: W + 30,
+      y: baseY,
+      baseY,
+      r,
+      hopT: Math.random() * Math.PI * 2,
+      hopAmp: amp,
+      hopFreq: freq,
+      passed:false
+    });
+  }
+
+  function spawnObstacle() {
+    // Tur1: rectangles
+    if (tur === 1) spawnRectObstacle();
+    else spawnBallObstacle();
+  }
+
+  function drawObstacles() {
+    for (const o of obstacles) {
+      if (o.kind === 'rect') {
+        ctx.fillStyle = "rgba(255,255,255,.18)";
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        ctx.strokeStyle = "rgba(255,255,255,.25)";
+        ctx.strokeRect(o.x, o.y, o.w, o.h);
+        ctx.save();
+        ctx.globalAlpha = 0.12;
+        ctx.strokeStyle = "rgba(255,0,255,1)";
+        ctx.lineWidth = 8;
+        ctx.strokeRect(o.x, o.y, o.w, o.h);
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.fillStyle = "rgba(255,255,255,.16)";
+        ctx.strokeStyle = "rgba(255,255,255,.28)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(o.x, o.y, o.r, 0, Math.PI*2);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.globalAlpha = 0.14;
+        if (tur === 2) ctx.strokeStyle = "rgba(255,80,140,1)";
+        else ctx.strokeStyle = "rgba(0,255,200,1)";
+        ctx.lineWidth = 10;
+        ctx.beginPath();
+        ctx.arc(o.x, o.y, o.r+1, 0, Math.PI*2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  function checkCollisions() {
+    for (const o of obstacles) {
+      if (o.kind === 'rect') {
+        if (aabb(player, o)) return true;
+      } else {
+        if (circleRectCollide(o, player)) return true;
+      }
+    }
+    return false;
+  }
+
+  // ===== Love sequence (end of Tur2) =====
+  function drawHeart(cx, cy, size) {
+    ctx.save();
+    ctx.fillStyle = "rgba(255,0,0,0.92)";
+    ctx.beginPath();
+    const topCurveHeight = size * 0.3;
+    ctx.moveTo(cx, cy + topCurveHeight);
+    ctx.bezierCurveTo(cx, cy, cx - size/2, cy, cx - size/2, cy + topCurveHeight);
+    ctx.bezierCurveTo(cx - size/2, cy + (size+topCurveHeight)/2, cx, cy + (size+topCurveHeight)/2, cx, cy + size);
+    ctx.bezierCurveTo(cx, cy + (size+topCurveHeight)/2, cx + size/2, cy + (size+topCurveHeight)/2, cx + size/2, cy + topCurveHeight);
+    ctx.bezierCurveTo(cx + size/2, cy, cx, cy, cx, cy + topCurveHeight);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawLoveOverlay() {
+    if (loveSequence <= 0) return;
+
+    const a = Math.min(1, loveSequence / 2.0); // fade out towards end
+    ctx.save();
+    ctx.globalAlpha = 0.65 * a;
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0,0,W,H);
+    ctx.restore();
+
+    drawText("Sizi seviyorum", W/2 - 155, H/2 - 20, 36, 0.96 * a, 900);
+
+    // 3 hearts
+    const baseY = H/2 + 45;
+    drawHeart(W/2 - 70, baseY, 34);
+    drawHeart(W/2,      baseY, 40);
+    drawHeart(W/2 + 70, baseY, 34);
+
+    // small prompt
+    drawText("3. Tura geçiliyor...", W/2 - 92, H/2 + 96, 14, 0.85 * a, 700, "rgba(255,255,255,.85)");
+  }
+
+  // ===== Tur3 message =====
+  function drawTur3Message() {
+    if (tur3Message <= 0) return;
+    const a = Math.min(1, tur3Message);
+    ctx.save();
+    ctx.globalAlpha = 0.65 * a;
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(W/2 - 320, H/2 - 70, 640, 120);
+    ctx.restore();
+
+    drawText("Üçüncü Bölüm", W/2 - 130, H/2 - 18, 28, 0.95*a, 900);
+    drawText("Daha Büyük Aşk ile Tasarlanıyor", W/2 - 245, H/2 + 18, 20, 0.92*a, 800);
+  }
+
+  // ===== Render =====
+  function render(now) {
+    drawNeonBackground(now);
+    drawWordFlash();
+    if (tur === 1 || tur === 2) drawArrowFlash();
+
+    // Ground
+    ctx.strokeStyle = "rgba(255,255,255,.14)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, groundY+1);
+    ctx.lineTo(W, groundY+1);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = (tur === 1) ? "rgba(0,255,255,1)" : (tur === 2 ? "rgba(255,80,140,1)" : "rgba(0,255,200,1)");
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(0, groundY+2);
+    ctx.lineTo(W, groundY+2);
+    ctx.stroke();
+    ctx.restore();
+
+    // Character & obstacles
+    drawCharacter();
+    drawObstacles();
+
+    // HUD
+    drawText(`Skor: ${Math.floor(score)}`, 16, 28, 18, 1, 800);
+    drawText(`Rekor: ${best}`, 16, 52, 14, 0.86);
+    drawText(`Tur: ${tur}`, 16, 74, 14, 0.78);
+
+    // Tur banner
+    if (turBanner > 0) {
+      ctx.save();
+      ctx.globalAlpha = turBanner;
+      ctx.fillStyle = "rgba(255,255,255,.92)";
+      ctx.font = "900 46px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText(`Tur ${tur}`, W/2 - 70, H/2 - 20);
+      ctx.restore();
+    }
+
+    // overlays
+    drawLoveOverlay();
+    drawTur3Message();
+
+    if (!running) {
+      ctx.save();
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      ctx.fillRect(W/2 - 220, H/2 - 90, 440, 170);
+      ctx.restore();
+
+      drawText("Oyun Bitti", W/2 - 92, H/2 - 35, 30, 1, 900);
+      drawText(`Skor: ${Math.floor(score)}`, W/2 - 60, H/2 + 5, 18, 0.92, 800);
+      drawText(`Rekor: ${best}`, W/2 - 62, H/2 + 30, 16, 0.88, 700);
+      drawText("R: Yeniden Başlat", W/2 - 92, H/2 + 62, 14, 0.88, 700);
+    } else if (!started) {
+      drawText("Dokun / Space ile Başla", W/2 - 150, H/2 - 10, 18, 0.92, 800);
+    }
+  }
+
+  // ===== Update =====
+  function update(dt) {
+    if (!running) return;
+
+    // fade timers
+    wordFlash = Math.max(0, wordFlash - dt * 0.9);
+    arrowFlash = Math.max(0, arrowFlash - dt * 1.2);
+    turBanner  = Math.max(0, turBanner  - dt * 0.6);
+    if (tur3Message > 0) tur3Message = Math.max(0, tur3Message - dt * 0.35);
+
+    // Love sequence timer controls Tur3 transition
+    if (loveSequence > 0) {
+      loveSequence = Math.max(0, loveSequence - dt);
+      if (loveSequence === 0 && afterLoveToTur3) {
+        afterLoveToTur3 = false;
+        setTur(3);
+      }
+      // During love overlay, keep game safe but still animate background; freeze gameplay
+      return;
+    }
+
+    if (!started) return;
+
+    // choose cfg
+    const cfg = tur === 1 ? T1 : (tur === 2 ? T2 : T3);
+
+    // movement
+    speedRamp = cfg.speedRamp;
+    speed += speedRamp * dt;
+    score += dt * 10;
+
+    const current = Math.floor(score);
+    updateBestIfNeeded();
+
+    // Word flash triggers:
+    // Tur1: Demir every 100
+    // Tur2: Bahar every 100
+    if ((tur === 1 || tur === 2)) {
+      const m100 = Math.floor(current / 100) * 100;
+      if (m100 >= 100 && m100 !== lastWordTrigger && current % 100 === 0) {
+        lastWordTrigger = m100;
+        wordFlash = 1;
+      }
+    }
+
+    // Arrow flash every 250 in Tur1 & Tur2
+    if (tur === 1 || tur === 2) {
+      const m250 = Math.floor(current / 250) * 250;
+      if (m250 >= 250 && m250 !== lastArrowTrigger && current % 250 === 0) {
+        lastArrowTrigger = m250;
+        arrowFlash = 1;
+      }
+    }
+
+    // Tur transitions
+    if (tur === 1 && current >= 500) {
+      setTur(2);
+    }
+    if (tur === 2 && current >= 1000) {
+      // end of Tur2 -> love overlay, then Tur3
+      loveSequence = 3.2;     // show for ~3.2s
+      afterLoveToTur3 = true;
+      obstacles = [];
+      spawnTimer = 0;
+      return;
+    }
+
+    // spawn
+    spawnTimer += dt;
+    if (spawnTimer >= nextSpawn * cfg.spawnFactor) {
+      spawnTimer = 0;
+      nextSpawn = cfg.spawnMin + Math.random() * cfg.spawnVar;
+      spawnObstacle();
+    }
+
+    // move obstacles + animations
+    for (const o of obstacles) {
+      o.x -= speed * dt;
+
+      if (o.kind === 'circle') {
+        o.hopT += dt * o.hopFreq;
+        const hop = Math.abs(Math.sin(o.hopT)) * o.hopAmp;
+        o.y = o.baseY - hop;
+      }
+
+      // Tur3: count clears (passed player) to trigger message
+      if (tur === 3 && !o.passed) {
+        const rightEdge = (o.kind === 'rect') ? (o.x + o.w) : (o.x + o.r);
+        if (rightEdge < player.x - 2) {
+          o.passed = true;
+          clearedInTur3 += 1;
+          if (clearedInTur3 === 3) {
+            tur3Message = 1;
+          }
+        }
+      }
+    }
+
+    // cleanup
+    obstacles = obstacles.filter(o => {
+      if (o.kind === 'rect') return o.x + o.w > -60;
+      return o.x + o.r > -60;
+    });
+
+    // physics
+    player.vy += cfg.gravity * dt;
+    player.y += player.vy * dt;
+
+    if (player.y + player.h >= groundY) {
+      player.y = groundY - player.h;
+      player.vy = 0;
+      player.onGround = true;
+    }
+
+    // collisions
+    if (checkCollisions()) {
+      running = false;
+      updateBestIfNeeded();
+    }
+  }
+
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    update(dt);
+    render(now);
+    requestAnimationFrame(loop);
+  }
+
+  // Input
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { e.preventDefault(); jump(); }
+    if (e.key.toLowerCase() === 'r') reset();
+    if (e.key.toLowerCase() === 'b') clearBest();
+  }, { passive:false });
+
+  canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); jump(); }, { passive:false });
+
+
+  // Mobil butonlar
+  const btnJump = document.getElementById('btnJump');
+  const btnRestart = document.getElementById('btnRestart');
+  const btnResetBest = document.getElementById('btnResetBest');
+
+  function bindBtn(btn, fn){
+    if(!btn) return;
+    btn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); fn(); }, {passive:false});
+    btn.addEventListener('click', (e)=>{ e.preventDefault(); fn(); });
+  }
+  bindBtn(btnJump, jump);
+  bindBtn(btnRestart, reset);
+  bindBtn(btnResetBest, clearBest);
+
+
+  // roundRect polyfill
+  if (!ctx.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+      r = Math.min(r, w/2, h/2);
+      this.beginPath();
+      this.moveTo(x+r, y);
+      this.arcTo(x+w, y, x+w, y+h, r);
+      this.arcTo(x+w, y+h, x, y+h, r);
+      this.arcTo(x, y+h, x, y, r);
+      this.arcTo(x, y, x+w, y, r);
+      this.closePath();
+      return this;
+    };
+  }
+
+  // init
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+
+<script>
+  // PWA: Service Worker kaydı
+  (function(){
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(()=>{});
+      });
+    }
+  })();
+</script>
+
+</body>
+</html>
