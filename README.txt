@@ -1,3 +1,7 @@
-Shadow Runner PWA (v2)
+Shadow Runner PWA (v7)
 
-GitHub Pages ile yayınlayınca Android Chrome > Ana ekrana ekle ile uygulama gibi açılır.
+- Her turda en fazla 1 adet kalkan spawn olur (fazla kalkan çıkması azaltıldı).
+- Kalkan kırılınca cam parçacığı efekti mevcut.
+- Başlangıç ekranında kredi yazısı var.
+
+GitHub Pages: ZIP'i değil, içindeki dosyaları repo köküne yükleyin.
