@@ -6,7 +6,7 @@
   "display": "standalone",
   "background_color": "#060712",
   "theme_color": "#060712",
-  "description": "Neon arka planlı, zıpla-kaç koşu oyunu (Demir/Bahar turları).",
+  "description": "Neon arka planlı, aile temalı zıpla-kaç koşu oyunu (Demir/Bahar/Baba).",
   "icons": [
     {
       "src": "icons/icon-192.png",

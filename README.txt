@@ -1,13 +1,3 @@
-Shadow Runner PWA
+Shadow Runner PWA (v2)
 
-Kurulum:
-1) Bu klasörü bir web sunucusunda yayınlayın (HTTPS önerilir).
-   - En kolay: bilgisayarda klasörde terminal açın:
-     python -m http.server 8080
-   - Telefonda aynı Wi‑Fi'da: http://BILGISAYAR_IP:8080
-
-2) Android Chrome:
-   - Siteyi açın
-   - Menü (⋮) > "Ana ekrana ekle" / "Uygulama yükle"
-
-Not: Dosyayı telefonda direkt dosyadan (file://) açarsanız Service Worker çalışmayabilir.
+GitHub Pages ile yayınlayınca Android Chrome > Ana ekrana ekle ile uygulama gibi açılır.

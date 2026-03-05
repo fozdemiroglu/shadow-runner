@@ -1,4 +1,4 @@
-const CACHE_NAME = "shadow-runner-v1";
+const CACHE_NAME = "shadow-runner-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -26,7 +26,6 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   event.respondWith(
     caches.match(req).then((cached) => cached || fetch(req).then((res) => {
-      // runtime cache
       const copy = res.clone();
       caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(()=>{});
       return res;
