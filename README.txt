@@ -1,7 +1,6 @@
-Shadow Runner PWA (v7)
+Shadow Runner PWA (v8)
 
-- Her turda en fazla 1 adet kalkan spawn olur (fazla kalkan çıkması azaltıldı).
-- Kalkan kırılınca cam parçacığı efekti mevcut.
-- Başlangıç ekranında kredi yazısı var.
+- Tur1 reklam yazıları HUD ile çakışmayacak şekilde yana kaydırıldı (aynı hizada).
+- Diğer özellikler: tek turda tek kalkan, kalkan kırılma parçacıkları, Tur2 +1 can.
 
 GitHub Pages: ZIP'i değil, içindeki dosyaları repo köküne yükleyin.

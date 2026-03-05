@@ -1,4 +1,4 @@
-const CACHE_NAME = "shadow-runner-v7";
+const CACHE_NAME = "shadow-runner-v8";
 const ASSETS = [
   "./",
   "./index.html",

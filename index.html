@@ -237,8 +237,9 @@
   // ===== Ads (Tur1: each once) =====
   const adDuration = 5.2; // +1s already applied
   const ads = [
-    { text:"ishayativedenetim.com", trig: 120, timer: 0, shown:false, align:"left",  x: 18, y: 22 },
-    { text:"ozdemirogludanismanlik.com", trig: 260, timer: 0, shown:false, align:"right", x: W-18, y: 22 }
+    // Repositioned so it doesn't overlap HUD (score/best)
+    { text:"ishayativedenetim.com", trig: 120, timer: 0, shown:false, align:"left",  x: 260, y: 0 },
+    { text:"ozdemirogludanismanlik.com", trig: 260, timer: 0, shown:false, align:"right", x: W-260, y: 0 }
   ];
 
   // ===== Helpers =====
@@ -962,6 +963,8 @@
   function drawAds(now, dt) {
     if (tur !== 1 || !started) return;
 
+    // Align with HUD top line but shifted away from left HUD block
+    const hudLineY = 28;
     const s = Math.floor(score);
     for (const a of ads) {
       if (!a.shown && s >= a.trig) { a.shown = true; a.timer = adDuration; }
@@ -970,7 +973,8 @@
         const phase = (a.timer > adDuration - 0.6) ? (adDuration - a.timer)/0.6 : (a.timer < 0.9 ? a.timer/0.9 : 1);
         const pulse = 0.65 + 0.35*Math.sin(now*0.006 + a.trig);
         const alpha = 0.85 * phase * pulse;
-        neonText(a.text, a.x, a.y, a.align, alpha, "rgba(0,255,255,1)", 14);
+        const y = (a.y === 0) ? (hudLineY) : a.y;
+        neonText(a.text, a.x, y, a.align, alpha, "rgba(0,255,255,1)", 14);
       }
     }
   }
